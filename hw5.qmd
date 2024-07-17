@@ -1,0 +1,370 @@
+---
+title: "Homework 5"
+author: "Anna Giczewska"
+format: html
+editor: visual
+---
+
+## Task 1: Conceptual Questions
+
+``` markdown
+1. What is the purpose of using cross-validation when fitting a random forest model?
+> Cross-validation is used in random forests to choose the best tuning parameter, like
+the number of trees. By dividing the data into k-folds, the model is trained on k-1 folds
+and validated on the remaining fold. This process is repeated for each fold, and the 
+performance is averaged. This helps ensure that the chosen parameter value allows the 
+model to generalize well to new, unseen data, rather than just memorizing the training 
+data.
+
+2. Describe the bagged tree algorithm.
+> Bagging, or Bootstrap Aggregating, is a way to improve the stability and accuracy 
+of machine learning algorithms. For bagged trees, you take multiple samples from your
+data (with replacement) and build a decision tree for each sample. Then, you combine 
+the predictions from all these trees. It's like asking multiple friends for their 
+opinions before making a decision – you get a more balanced and reliable outcome.
+
+3. What is meant by a general linear model?
+> A general linear model is a statistical technique that models the relationship between
+one dependent variable and one or more independent variables. The model assumes that the
+relationship between the dependent variable and the independent variables is linear. This
+includes models like for example simple linear regression or multiple linear regression.
+
+4. When fitting a multiple linear regression model, what does adding an interaction term do? 
+That is, what does it allow the model to do differently as compared to when it is not 
+included in the model?
+> Adding an interaction term lets your model capture the combined effect of two variables
+on the outcome, beyond their individual effects. It allows the model to consider that the
+relationship between variables isn't just additive but can be more complex.
+
+5. Why do we split our data into a training and test set?
+> Splitting your data into training and test sets helps you evaluate how well your model
+will perform on new data. The training set is for building the model, while the test set
+is like a final exam to see how well it learned. This way, you can check if your model
+can generalize well to new data and isn't just overfitting to the training data.
+
+```
+
+## Task 2: Fitting Models
+
+Read the data
+
+```{r}
+# Load required packages
+library(readr)
+library(httr)
+
+# Define the URL
+url <- "https://www4.stat.ncsu.edu/~online/datasets/heart.csv"
+
+# Read the CSV file directly from the URL
+heart_data <- read_csv(url)
+
+# View the first few rows of the data
+head(heart_data)
+
+```
+
+### Quick EDA/Data Preparation
+
+```{r}
+# Load necessary libraries
+library(caret)
+library(ggplot2)
+
+# assign heart data to object data
+data <- heart_data
+
+#Step 1: Quickly understand the data
+# Check for missingness
+summary(data)
+sapply(data, function(x) sum(is.na(x)))
+#no missing values
+
+# Summarize data
+# Relationships of variables to HeartDisease
+table(data$HeartDisease)
+# Numeric variables
+# Identify numeric columns
+numeric_vars <- sapply(data, is.numeric)
+numeric_cols <- names(data)[numeric_vars]
+
+# Create boxplots for all numeric variables against HeartDisease
+for (col in numeric_cols) {
+  if (col != "HeartDisease") {
+    boxplot_formula <- as.formula(paste(col, "~ HeartDisease"))
+    boxplot(boxplot_formula, data = data, main = paste(col, "vs HeartDisease"))
+  }
+}
+
+#Categorical variables
+# Identify categorical columns
+categorical_vars <- sapply(data, is.character)
+categorical_cols <- names(data)[categorical_vars]
+
+# Loop through categorical columns and create ggplot bar plots
+for (col in categorical_cols) {
+  if (col != "HeartDisease") {
+    p <- ggplot(data, aes(x = as.factor(.data[[col]]), fill = as.factor(HeartDisease))) +
+      geom_bar(position = "dodge") +
+      labs(title = paste(col, "vs HeartDisease"), x = col, y = "Count") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    print(p)
+  }
+}
+
+# Step 2: Create a Factor Version of HeartDisease Variable
+data$HeartDiseaseFactor <- as.factor(data$HeartDisease)
+str(data)
+# Remove ST_Slope and original HeartDisease variables
+data <- data[, !(names(data) %in% c("ST_Slope", "HeartDisease"))]
+str(data)
+
+# Step 3: Create Dummy Variables for Categorical Predictors
+# Define var list for dummyVars
+dummy_formula <- ~ Sex + ExerciseAngina + ChestPainType + RestingECG
+
+# Create the dummyVars object
+dummies <- dummyVars(dummy_formula, data = data)
+
+# Use predict to create new columns
+dummy_data <- predict(dummies, newdata = data)
+
+# Convert to data frame and add to original data
+dummy_data <- as.data.frame(dummy_data)
+data <- cbind(data, dummy_data)
+
+# Drop original categorical columns
+data <- data[, !(names(data) %in% c("Sex", "ExerciseAngina", "ChestPainType", "RestingECG"))]
+str(data)
+```
+
+
+### Data Split
+
+```{r}
+# Set a seed for reproducibility
+set.seed(1234)
+
+# Create indices for the training set
+trainIndex <- createDataPartition(data$HeartDisease, p = 0.7, list = FALSE)
+
+# Split the data into training and test sets
+trainData <- data[trainIndex, ]
+testData <- data[-trainIndex, ]
+
+# Check the dimensions of the splits
+dim(trainData)
+dim(testData)
+
+```
+
+### kNN
+
+```{r}
+
+trctrl <- trainControl(method = "repeatedcv", 
+                       number = 10, 
+                       repeats = 3)
+
+# Define the tuning grid
+tune_grid <- expand.grid(k = 1:40)
+
+set.seed(1234)
+knn_fit <- train(HeartDiseaseFactor ~.,
+                 data = trainData, 
+                 method = "knn",
+ trControl=trctrl,
+ preProcess = c("center", "scale"),
+ tuneGrid = tune_grid)
+                              
+
+# Make predictions on the test set
+predictions <- predict(knn_fit, newdata = testData)
+
+# Evaluate the model
+knn_conf_matrix <- confusionMatrix(predictions, testData$HeartDiseaseFactor)
+print(knn_conf_matrix)
+
+```
+
+### Logistic Regression
+
+```{r}
+set.seed(1234)
+# Set up the train control
+train_control <- trainControl(method = "repeatedcv", 
+                              number = 10, 
+                              repeats = 3)
+
+# Model 1: All predictors
+model1 <- train(HeartDiseaseFactor ~ ., 
+                data = trainData, 
+                method = "glm", 
+                family = "binomial",
+                preProcess = c("center", "scale"),
+                trControl = train_control)
+
+# Model 2: A subset of predictors
+model2 <- train(HeartDiseaseFactor ~ Age + RestingBP + Cholesterol, 
+                data = trainData, 
+                method = "glm", 
+                family = "binomial",
+                preProcess = c("center", "scale"),
+                trControl = train_control)
+
+# Model 3: Another subset of predictors
+model3 <- train(HeartDiseaseFactor ~ Age + RestingBP + Cholesterol + FastingBS + MaxHR, 
+                data = trainData, 
+                method = "glm", 
+                family = "binomial",
+                preProcess = c("center", "scale"),
+                trControl = train_control)
+
+# Compare models
+results <- resamples(list(model1 = model1, model2 = model2, model3 = model3))
+summary(results)
+dotplot(results)
+
+#From the summary, Model 1 consistently has higher values for both accuracy and kappa compared to Models 2 and 3. Specifically. Therefore, Model 1 is the best model based on these evaluation metrics.
+
+# Since model1 is the best model
+predictions <- predict(model1, newdata = testData)
+
+# Evaluate the best model
+lg_conf_matrix <- confusionMatrix(predictions, testData$HeartDiseaseFactor)
+print(lg_conf_matrix)
+```
+
+### Tree models
+
+```{r}
+library(rpart)
+library(randomForest)
+library(gbm)
+
+set.seed(1234)
+#Train classification tree model
+ctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+grid_cp <- expand.grid(cp = seq(0, 0.1, by = 0.001))
+
+rpart_model1 <- train(HeartDiseaseFactor ~ ., data = trainData, 
+                     method = "rpart", 
+                     trControl = ctrl, 
+                     tuneGrid = grid_cp)
+
+print(rpart_model1)
+
+rpart_model2 <- train(HeartDiseaseFactor ~ Age + RestingBP + Cholesterol + MaxHR, data = trainData, 
+                     method = "rpart", 
+                     trControl = ctrl, 
+                     tuneGrid = grid_cp)
+
+print(rpart_model2)
+
+#Train a random Forest Model
+grid_rf <- expand.grid(mtry = 1:(ncol(trainData)-1))
+
+#this takes way too long to compute
+#rf_model1 <- train(HeartDiseaseFactor ~ ., data = trainData, 
+#                  method = "rf", 
+#                  trControl = ctrl, 
+#                  tuneGrid = grid_rf)
+
+#print(rf_model1)
+
+library(tidyverse)
+grid_rf2 <- expand.grid(mtry = 1:(ncol(trainData |> select(HeartDiseaseFactor, Age, RestingBP, Cholesterol, MaxHR))-1))
+
+rf_model2 <- train(HeartDiseaseFactor ~ Age + RestingBP + Cholesterol + MaxHR, data = trainData, 
+                  method = "rf", 
+                  trControl = ctrl, 
+                  tuneGrid = grid_rf2)
+
+print(rf_model2)
+
+#Train a boosted Tree Model
+grid_gbm <- expand.grid(n.trees = c(25, 50, 100, 200),
+                        interaction.depth = c(1, 2, 3),
+                        shrinkage = 0.1,
+                        n.minobsinnode = 10)
+
+gbm_model1 <- train(HeartDiseaseFactor ~ ., data = trainData, 
+                   method = "gbm", 
+                   trControl = ctrl, 
+                   tuneGrid = grid_gbm, 
+                   verbose = FALSE)
+
+print(gbm_model1)
+
+gbm_model2 <- train(HeartDiseaseFactor ~ Age + RestingBP + Cholesterol + MaxHR, data = trainData, 
+                   method = "gbm", 
+                   trControl = ctrl, 
+                   tuneGrid = grid_gbm, 
+                   verbose = FALSE)
+
+print(gbm_model2)
+
+
+#Evaluate models on the TEST set
+# Predictions
+#full model
+rpart_preds1 <- predict(rpart_model1, newdata = testData)
+#rf_preds1 <- predict(rf_model1, newdata = testData)
+gbm_preds1 <- predict(gbm_model1, newdata = testData)
+#models with selected variables
+rpart_preds2 <- predict(rpart_model2, newdata = testData)
+rf_preds2 <- predict(rf_model2, newdata = testData)
+gbm_preds2 <- predict(gbm_model2, newdata = testData)
+
+# Confusion Matrices
+rpart_cm1 <- confusionMatrix(rpart_preds1, testData$HeartDiseaseFactor)
+#rf_cm1 <- confusionMatrix(rf_preds1, testData$HeartDiseaseFactor)
+gbm_cm1 <- confusionMatrix(gbm_preds1, testData$HeartDiseaseFactor)
+rpart_cm2 <- confusionMatrix(rpart_preds2, testData$HeartDiseaseFactor)
+rf_cm2 <- confusionMatrix(rf_preds2, testData$HeartDiseaseFactor)
+gbm_cm2 <- confusionMatrix(gbm_preds2, testData$HeartDiseaseFactor)
+
+print(rpart_cm1)
+#print(rf_cm1)
+print(gbm_cm1)
+print(rpart_cm2)
+print(rf_cm2)
+print(gbm_cm2)
+```
+
+
+### Compare models
+
+```{r}
+# Extracting accuracy for comparison
+
+knn_accuracy <- knn_conf_matrix$overall['Accuracy']
+logreg_accuracy <- lg_conf_matrix$overall['Accuracy']
+rpart_accuracy1 <- rpart_cm1$overall['Accuracy']
+rpart_accuracy2 <- rpart_cm2$overall['Accuracy']
+#rf_accuracy1 <- rf_cm1$overall['Accuracy']
+rf_accuracy2 <- rf_cm2$overall['Accuracy']
+gbm_accuracy1 <- gbm_cm1$overall['Accuracy']
+gbm_accuracy2 <- gbm_cm2$overall['Accuracy']
+
+# Combine accuracies into a data frame for easy comparison
+accuracy_results <- data.frame(
+  Model = c("kNN", 
+            "Logistic Regression", 
+            "rpart full", "rpart slected",
+            #"Random Forest full", 
+            "Random Forest selected",
+            "GBM full", "GBM selected"),
+  Accuracy = c(knn_accuracy, 
+               logreg_accuracy, 
+               rpart_accuracy1, rpart_accuracy2,  
+               #rf_accuracy1, 
+               rf_accuracy2,  
+               gbm_accuracy1, gbm_accuracy2)
+)
+
+# Print the results
+print(accuracy_results)
+```
+
+In conclusion Logistic Regression Model seems to be performing the best. 
